@@ -7,14 +7,9 @@ services:
     volumes:
       - ./ollama:/root/.ollama
     restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    gpus: all
     environment:
+      - OLLAMA_KEEP_ALIVE=-1
       - OLLAMA_SCHED_SPREAD=1
 
   open-webui:
