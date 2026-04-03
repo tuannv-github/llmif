@@ -1,10 +1,12 @@
-# vLLM + Qwen2.5-32B-Instruct (dense). Works with vLLM 0.8.x / older Transformers.
-# Qwen3.5-35B-A3B (qwen3_5_moe) needs Transformers ~4.57+ and a newer vLLM image than drikster80/gh200 0.8.5.
-# Default image: vllm/vllm-openai (typical x86_64). ARM64 + H100/GH200: docker-compose-vllm-gh200.yaml.
-# Merge with main stack:
-#   docker compose -f docker-compose.yaml -f docker-compose-vllm.yaml up -d
-# Or vLLM only:
-#   docker compose -f docker-compose-vllm.yaml up -d
+# vLLM + Qwen2.5-32B-Instruct for ARM64 + H100 / GH200 (vLLM 0.8.x; Qwen3.5 MoE needs newer TF/vLLM).
+# Image: drikster80/vllm-gh200-openai — https://hub.docker.com/r/drikster80/vllm-gh200-openai
+# Other ARM64 (non-H100): consider drikster80/vllm-aarch64-openai per image maintainer.
+# x86_64: use docker-compose-vllm.yaml instead.
+#
+# Standalone:
+#   docker compose -f docker-compose-vllm-gh200.yaml up -d
+# With main Open WebUI stack:
+#   docker compose -f docker-compose.yaml -f docker-compose-vllm-gh200.yaml up -d
 # Optional: HF_TOKEN=... if the hub asks for auth.
 
 services:
@@ -30,7 +32,7 @@ services:
     restart: "no"
 
   vllm:
-    image: vllm/vllm-openai:latest
+    image: drikster80/vllm-gh200-openai:latest
     container_name: vllm
     depends_on:
       model-download:

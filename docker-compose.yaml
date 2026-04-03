@@ -24,8 +24,8 @@ services:
       - OPENAI_API_BASE_URL=http://vllm:8000/v1
       - OPENAI_API_KEY=EMPTY
       - ENABLE_OPENAI_API=true
-      - DEFAULT_MODELS=Qwen/Qwen3-8B
-      - OPENAI_API_CONFIGS=[{"name":"vLLM","base_url":"http://vllm:8000/v1","api_key":"EMPTY","models":["Qwen/Qwen3-8B"]}]
+      - DEFAULT_MODELS=qwen2.5-32b
+      - OPENAI_API_CONFIGS=[{"name":"vLLM","base_url":"http://vllm:8000/v1","api_key":"EMPTY","models":["qwen2.5-32b"]}]
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
