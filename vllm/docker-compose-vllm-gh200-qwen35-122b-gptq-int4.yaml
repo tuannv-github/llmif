@@ -17,16 +17,16 @@
 # Example .env (tensor parallel must equal visible GPU count):
 #   VLLM_TENSOR_PARALLEL_SIZE=1
 #   # or on 4 GPUs: VLLM_TENSOR_PARALLEL_SIZE=4
-#   VLLM_MAX_MODEL_LEN=131072
-#   VLLM_GPU_MEMORY_UTILIZATION=0.88
+#   VLLM_MAX_MODEL_LEN=65536
+#   VLLM_GPU_MEMORY_UTILIZATION=0.80
 #
 # Memory tuning: https://docs.vllm.ai/en/latest/configuration/conserving_memory/
 #
 # Image: Dockerfile.vllm-openai-qwen35 on vllm/vllm-openai (Transformers 5.x for Qwen3.5 MoE). Override
 # VLLM_BASE_IMAGE / skip build with VLLM_IMAGE if you use a pre-built image.
 #
-# Env: VLLM_TENSOR_PARALLEL_SIZE (default 1), VLLM_MAX_MODEL_LEN (default 131072), VLLM_GPU_MEMORY_UTILIZATION
-# (default 0.88), VLLM_HOST_PORT (default 8000), VLLM_TOKENIZER (default: same dir as weights — see below).
+# Env: VLLM_TENSOR_PARALLEL_SIZE (default 1), VLLM_MAX_MODEL_LEN (default 65536), VLLM_GPU_MEMORY_UTILIZATION
+# (default 0.80), VLLM_HOST_PORT (default 8000), VLLM_TOKENIZER (default: same dir as weights — see below).
 # PYTORCH_ALLOC_CONF set by default. Repo-root .env: HF_TOKEN, VLLM_* — loaded via env_file.
 #
 # Default serve uses --language-model-only (HF model card): text/chat only, skips vision encoder and
@@ -113,11 +113,11 @@ services:
       - "--tensor-parallel-size"
       - "${VLLM_TENSOR_PARALLEL_SIZE:-1}"
       - "--max-model-len"
-      - "${VLLM_MAX_MODEL_LEN:-131072}"
+      - "${VLLM_MAX_MODEL_LEN:-65536}"
       - "--quantization"
       - "moe_wna16"
       - "--gpu-memory-utilization"
-      - "${VLLM_GPU_MEMORY_UTILIZATION:-0.88}"
+      - "${VLLM_GPU_MEMORY_UTILIZATION:-0.80}"
       - "--enable-auto-tool-choice"
       - "--tool-call-parser"
       - "qwen3_coder"
