@@ -1,7 +1,9 @@
 # vLLM + Qwen2.5-32B-Instruct on ARM64 + H100 / GH200.
 # Model: https://huggingface.co/Qwen/Qwen2.5-32B-Instruct
-# Qwen3.5: docker-compose-vllm-gh200-qwen35-9b.yaml (~9B dense), docker-compose-vllm-gh200-qwen35-35b.yaml (35B-A3B),
-# docker-compose-vllm-gh200-qwen35-122b.yaml (122B FP8; needs multi-GPU for long context).
+# Qwen3.5: docker-compose-vllm-gh200-qwen35-9b.yaml (~9B dense), docker-compose-vllm-gh200-qwen35-27b.yaml (~27B dense),
+# docker-compose-vllm-gh200-qwen35-35b-a3b.yaml (35B-A3B MoE),
+# docker-compose-vllm-gh200-qwen35-122b-a10b.yaml (122B-A10B BF16), docker-compose-vllm-gh200-qwen35-122b.yaml (122B-A10B FP8),
+# docker-compose-vllm-gh200-qwen35-122b-gptq-int4.yaml (122B GPTQ).
 #
 # Platform: linux/arm64. Image: vllm/vllm-openai (multi-arch); override with VLLM_IMAGE (e.g. drikster80/vllm-gh200-openai:v0.8.5
 # if you need the older GH200-tuned image).

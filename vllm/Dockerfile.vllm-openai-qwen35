@@ -5,10 +5,10 @@
 # Build (match host arch, e.g. arm64 GH200):
 #   docker build -f Dockerfile.vllm-openai-qwen35 -t vllm-openai-qwen35:latest .
 #
-# Override base tag:
+# Override base tag (use nightly if you need --cpu-offload-params / newer offload behavior):
 #   docker build --build-arg VLLM_BASE_IMAGE=vllm/vllm-openai:v0.9.0 ...
 
-ARG VLLM_BASE_IMAGE=vllm/vllm-openai:latest
+ARG VLLM_BASE_IMAGE=vllm/vllm-openai:nightly
 FROM ${VLLM_BASE_IMAGE}
 
 USER root

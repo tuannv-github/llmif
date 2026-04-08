@@ -5,8 +5,8 @@
 # so Transformers 5.x is installed (Qwen3.5 MoE tokenizers; stock image: KeyError: Qwen3_5MoeConfig).
 #
 # Build + run:
-#   docker compose -f docker-compose-vllm-gh200-qwen35-35b.yaml build vllm
-#   docker compose -f docker-compose-vllm-gh200-qwen35-35b.yaml up -d
+#   docker compose -f docker-compose-vllm-gh200-qwen35-35b-a3b.yaml build vllm
+#   docker compose -f docker-compose-vllm-gh200-qwen35-35b-a3b.yaml up -d
 #
 # HF vLLM example uses --tensor-parallel-size 8 and --max-model-len 262144 for long context; tune
 # VLLM_TENSOR_PARALLEL_SIZE / VLLM_MAX_MODEL_LEN for your GPUs. OOM tips:
@@ -56,7 +56,7 @@ services:
         TRANSFORMERS_VERSION: ${TRANSFORMERS_VERSION:-5.5.0}
         HUGGINGFACE_HUB_VERSION: ${HUGGINGFACE_HUB_VERSION:-1.8.0}
     image: ${VLLM_IMAGE:-vllm-openai-qwen35:latest}
-    container_name: vllm-qwen35-35b
+    container_name: vllm-qwen35-35b-a3b
     env_file:
       - path: .env
         required: false

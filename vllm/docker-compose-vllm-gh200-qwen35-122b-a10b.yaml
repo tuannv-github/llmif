@@ -1,66 +1,61 @@
-# Qwen3.5-122B-A10B-FP8 + vLLM on NVIDIA GH200 (Grace Hopper Superchip, linux/arm64 + CUDA).
-# Model card: https://huggingface.co/Qwen/Qwen3.5-122B-A10B-FP8
-# Hub default BF16 weights: docker-compose-vllm-gh200-qwen35-122b-a10b.yaml (Qwen/Qwen3.5-122B-A10B).
+# Qwen3.5-122B-A10B (default Hub BF16/F32 safetensors) + vLLM on NVIDIA GH200 (linux/arm64 + CUDA).
+# Model card: https://huggingface.co/Qwen/Qwen3.5-122B-A10B
 #
-# GH200 sizing (typical ~96 GB HBM3 per Hopper GPU; nvidia-smi shows that per “GPU 0”, not full “480 GB” pool):
-#   - 122B MoE FP8 still does not fit one ~96 GB GPU with tensor parallel 1: you will OOM while *loading*
-#     weights (e.g. SharedFusedMoE / fp8 create_weights), before KV cache matters. Fix: spread the model.
-#   - Set VLLM_TENSOR_PARALLEL_SIZE to the number of physical GPUs you expose (e.g. 4 or 8). HF’s example
-#     uses TP=8 for this model. `gpus: all` passes every GPU to the container; TP must match that count.
-#   - If you only have one GH200, prefer docker-compose-vllm-gh200-qwen35-122b-gptq-int4.yaml (smaller weights) or a smaller
-#     model (docker-compose-vllm-gh200-qwen35-9b.yaml, docker-compose-vllm-gh200-qwen35-27b.yaml, docker-compose-vllm-gh200-qwen35-35b-a3b.yaml).
-#   - Cutting VLLM_MAX_MODEL_LEN helps KV pressure after load; it does not fix MoE weight OOM on TP=1.
-#   - vLLM 0.19+ `vllm serve` always uses the V1 engine; there is no supported VLLM_USE_V1 / legacy switch (unknown env in logs).
-#   - --cpu-offload-gb > 0 without selective params: older vLLM may hit V1 KV assert after load (PR #18298). Prefer
-#     vllm/vllm-openai:nightly + --cpu-offload-params experts (segment match for mlp.experts.*) + --cpu-offload-gb (see
-#     https://docs.vllm.ai/en/latest/cli/serve/#-cpu-offload-params ). Stable tags may lack --cpu-offload-params.
+# Smaller checkpoints on GH200 (same architecture, different repo):
+#   - docker-compose-vllm-gh200-qwen35-122b.yaml — Qwen3.5-122B-A10B-FP8
+#   - docker-compose-vllm-gh200-qwen35-122b-gptq-int4.yaml — GPTQ Int4
+#
+# GH200 sizing (typical ~96 GB HBM3 per Hopper GPU; nvidia-smi shows that per “GPU 0”):
+#   - 122B MoE BF16 weights are heavier than the FP8 variant: expect higher host RAM / --cpu-offload-gb needs,
+#     or more GPUs (HF vLLM example: --tensor-parallel-size 8, --max-model-len 262144).
+#   - Set VLLM_TENSOR_PARALLEL_SIZE to the number of physical GPUs you expose. `gpus: all` passes every GPU;
+#     TP must match that count.
+#   - If you only have one GH200, prefer the FP8 or GPTQ compose above, or a smaller model
+#     (docker-compose-vllm-gh200-qwen35-9b.yaml / docker-compose-vllm-gh200-qwen35-27b.yaml / docker-compose-vllm-gh200-qwen35-35b-a3b.yaml).
+#   - Cutting VLLM_MAX_MODEL_LEN helps KV pressure after load; it does not fix MoE weight OOM on TP=1 by itself.
+#   - vLLM 0.19+ `vllm serve` uses the V1 engine.
+#   - --cpu-offload-gb > 0: prefer vllm/vllm-openai:nightly + --cpu-offload-params experts + --cpu-offload-gb
+#     (https://docs.vllm.ai/en/latest/cli/serve/#-cpu-offload-params ).
 #   - If PyTorch suggests PYTORCH_ALLOC_CONF=expandable_segments:True but “reserved unallocated” is tiny, the failure is
-#     real OOM during weight creation — raise VLLM_CPU_OFFLOAD_GB, add GPUs/TP, or use a smaller checkpoint (not fragmentation).
-#   - Log tells: uniproc_executor + SharedFusedMoE + fp8 create_weights + CUDA OOM ≈ TP=1 (or Docker only sees 1 GPU).
-#     Check `docker compose ... run --rm vllm nvidia-smi -L` vs `VLLM_TENSOR_PARALLEL_SIZE`. Smaller checkpoint:
-#     docker-compose-vllm-gh200-qwen35-122b-gptq-int4.yaml
+#     real OOM during weight creation — raise VLLM_CPU_OFFLOAD_GB, add GPUs/TP, or switch to FP8/GPTQ (not fragmentation).
 #
 # Prerequisites: recent NVIDIA driver, NVIDIA Container Toolkit, Docker with GPU support; run from repo root
 # so `.env` and `./vllm-models` resolve. `platform: linux/arm64` matches GH200 userland.
 #
 # Build + run:
-#   docker compose -f docker-compose-vllm-gh200-qwen35-122b.yaml build vllm
-#   docker compose -f docker-compose-vllm-gh200-qwen35-122b.yaml up -d
+#   docker compose -f docker-compose-vllm-gh200-qwen35-122b-a10b.yaml build vllm
+#   docker compose -f docker-compose-vllm-gh200-qwen35-122b-a10b.yaml up -d
 #
-# Example .env for an 8×GH200 node:
+# Example .env for an 8×GPU node (matches HF vLLM recipe scale):
 #   VLLM_TENSOR_PARALLEL_SIZE=8
-#   VLLM_MAX_MODEL_LEN=131072
+#   VLLM_MAX_MODEL_LEN=262144
 #   VLLM_GPU_MEMORY_UTILIZATION=0.88
 #
-# Single-GH200 (~96 GiB HBM): FP8 122B MoE does not fit TP=1 without offload. Default build uses nightly; unset
-#   VLLM_CPU_OFFLOAD_GB uses TP=1 default 48 GiB offload with VLLM_CPU_OFFLOAD_PARAMS=experts (override in .env). If serve
-#   still fails, try GPTQ compose or raise TP across more GPUs.
+# Single-GH200 (~96 GiB HBM): BF16 122B MoE rarely fits TP=1 without substantial expert offload. Unset
+#   VLLM_CPU_OFFLOAD_GB with TP=1 defaults to 48 GiB offload + VLLM_CPU_OFFLOAD_PARAMS=experts (override in .env).
+#   BF16 may need a higher VLLM_CPU_OFFLOAD_GB than FP8; if serve fails, use docker-compose-vllm-gh200-qwen35-122b.yaml
+#   (FP8) or raise TP across more GPUs.
 #
 # Memory tuning: https://docs.vllm.ai/en/latest/configuration/conserving_memory/
 #
 # Image: Dockerfile.vllm-openai-qwen35 on vllm/vllm-openai (Transformers 5.x for Qwen3.5 MoE). Override
 # VLLM_BASE_IMAGE / skip build with VLLM_IMAGE if you use a pre-built image.
 #
-# Env (see CacheConfig https://docs.vllm.ai/en/v0.10.2/configuration/engine_args.html#cacheconfig ):
+# Env (see vLLM CacheConfig / serve docs):
 #   VLLM_TENSOR_PARALLEL_SIZE (default 1), VLLM_MAX_MODEL_LEN (default 131072),
 #   VLLM_GPU_MEMORY_UTILIZATION (default 0.88), VLLM_HOST_PORT (default 8000),
-#   VLLM_ENABLE_SWAP_SPACE=1 + VLLM_SWAP_SPACE (GiB/GPU; default 256) only on older vLLM that still support
-#   --swap-space (v0.10.x CacheConfig). Current vllm/vllm-openai images omit this flag — leave unset (default).
-#   VLLM_KV_CACHE_DTYPE (default auto; try fp8 / fp8_e4m3 to shrink KV on supported CUDA),
+#   VLLM_ENABLE_SWAP_SPACE=1 + VLLM_SWAP_SPACE (GiB/GPU) only on vLLM builds that still support --swap-space.
+#   VLLM_KV_CACHE_DTYPE (default auto),
 #   VLLM_CPU_OFFLOAD_GB (per GPU; unset + TP=1 defaults to 48 — set 0 to disable). Use nightly + VLLM_CPU_OFFLOAD_PARAMS.
-#   VLLM_CPU_OFFLOAD_PARAMS (optional; when COFF>0: unset → default segment experts; empty value → no --cpu-offload-params),
-#   VLLM_KV_CACHE_MEMORY_BYTES (optional; caps KV bytes per GPU when set),
-#   VLLM_CALCULATE_KV_SCALES=1 when using FP8 KV and you want dynamic k/v scales,
-#   VLLM_ENABLE_EXPERT_PARALLEL=1 for MoE expert-parallel (test vs tensor parallel on your cluster),
-#   VLLM_MAX_PARALLEL_LOADING_WORKERS (optional; reduces host-RAM spikes during TP checkpoint load),
-#   VLLM_KV_OFFLOADING_SIZE + VLLM_KV_OFFLOADING_BACKEND (native|lmcache) for newer vLLM KV CPU offload path.
-#   VLLM_ENFORCE_EAGER=1 adds --enforce-eager (disables torch.compile / CUDAGraphs).
-# PYTORCH_ALLOC_CONF / CUDA_MANAGED_FORCE_DEVICE_ALLOC set in `environment` and re-exported in the start script so
-# EngineCore worker processes inherit them. Repo-root .env: HF_TOKEN, VLLM_* — loaded via env_file.
+#   VLLM_CPU_OFFLOAD_PARAMS (optional; when COFF>0: unset → default segment experts; empty → no --cpu-offload-params),
+#   VLLM_KV_CACHE_MEMORY_BYTES, VLLM_CALCULATE_KV_SCALES, VLLM_ENABLE_EXPERT_PARALLEL,
+#   VLLM_MAX_PARALLEL_LOADING_WORKERS, VLLM_KV_OFFLOADING_SIZE + VLLM_KV_OFFLOADING_BACKEND,
+#   VLLM_ENFORCE_EAGER=1 for --enforce-eager.
+# PYTORCH_ALLOC_CONF / CUDA_MANAGED_FORCE_DEVICE_ALLOC set in `environment` and re-exported in the start script.
+# Repo-root .env: HF_TOKEN, VLLM_* — loaded via env_file.
 #
-# Default serve uses --language-model-only (HF model card): text/chat only, skips vision encoder and
-# avoids loading preprocessor_config.json. For image/video, remove that flag and use a full snapshot
-# (including preprocessor_config.json / vision assets); re-run model-download if those files are missing.
+# Default serve uses --language-model-only (HF model card): text/chat only, skips vision encoder. For image/video,
+# remove that flag and use a full snapshot (preprocessor_config.json / vision assets); re-run model-download if missing.
 
 services:
   model-download:
@@ -78,12 +73,12 @@ services:
         set -e
         python -m pip install -q --no-cache-dir huggingface_hub hf_transfer
         export HF_HUB_ENABLE_HF_TRANSFER=1
-        if [ -f /models/Qwen3.5-122B-A10B-FP8/config.json ]; then
+        if [ -f /models/Qwen3.5-122B-A10B/config.json ]; then
           echo "Model already present; skipping download."
           exit 0
         fi
-        echo "Downloading Qwen/Qwen3.5-122B-A10B-FP8 (very large, one-time)..."
-        python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='Qwen/Qwen3.5-122B-A10B-FP8', local_dir='/models/Qwen3.5-122B-A10B-FP8', local_dir_use_symlinks=False)"
+        echo "Downloading Qwen/Qwen3.5-122B-A10B (very large BF16 snapshot, one-time)..."
+        python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='Qwen/Qwen3.5-122B-A10B', local_dir='/models/Qwen3.5-122B-A10B', local_dir_use_symlinks=False)"
     restart: "no"
 
   vllm:
@@ -96,7 +91,7 @@ services:
         TRANSFORMERS_VERSION: ${TRANSFORMERS_VERSION:-5.5.0}
         HUGGINGFACE_HUB_VERSION: ${HUGGINGFACE_HUB_VERSION:-1.8.0}
     image: ${VLLM_IMAGE:-vllm-openai-qwen35:latest}
-    container_name: vllm-qwen35-122b
+    container_name: vllm-qwen35-122b-a10b
     env_file:
       - path: .env
         required: false
@@ -126,7 +121,7 @@ services:
           echo "=== GPUs visible in container (nvidia-smi -L) ==="
           nvidia-smi -L 2>/dev/null || true
         fi
-        echo "=== vLLM tensor_parallel_size=$$TP (must match GPU count above for 122B FP8) ==="
+        echo "=== vLLM tensor_parallel_size=$$TP (must match GPU count above for 122B-A10B BF16) ==="
         if [ -z "$${VLLM_CPU_OFFLOAD_GB+x}" ]; then
           if [ "$$TP" = "1" ]; then
             COFF=48
@@ -150,9 +145,9 @@ services:
           fi
         fi
         if [ "$${COFF:-0}" -gt 0 ] 2>/dev/null && [ -z "$${OPT_CPU_OFFLOAD_PARAMS:-}" ]; then
-          echo "WARN: --cpu-offload-gb > 0 but VLLM_CPU_OFFLOAD_PARAMS is empty (disable selective offload) — may hit V1 KV issues; omit the var for default experts, or use GPTQ / multi-GPU." >&2
+          echo "WARN: --cpu-offload-gb > 0 but VLLM_CPU_OFFLOAD_PARAMS is empty (disable selective offload) — may hit V1 KV issues; omit the var for default experts, or use FP8 / GPTQ / multi-GPU." >&2
         elif [ "$$TP" = "1" ] && [ "$${COFF:-0}" -eq 0 ] 2>/dev/null; then
-          echo "WARN: TP=1 and --cpu-offload-gb 0 — Qwen3.5-122B-A10B-FP8 typically OOMs while loading MoE weights on ~96 GiB HBM. Set VLLM_CPU_OFFLOAD_GB or use docker-compose-vllm-gh200-qwen35-122b-gptq-int4.yaml / more GPUs." >&2
+          echo "WARN: TP=1 and --cpu-offload-gb 0 — Qwen3.5-122B-A10B (BF16) typically OOMs while loading MoE weights on ~96 GiB HBM. Set VLLM_CPU_OFFLOAD_GB, use docker-compose-vllm-gh200-qwen35-122b.yaml (FP8), docker-compose-vllm-gh200-qwen35-122b-gptq-int4.yaml, or more GPUs." >&2
         fi
         OPT_SWAP=""
         if [ "$${VLLM_ENABLE_SWAP_SPACE:-0}" = "1" ]; then
@@ -183,9 +178,9 @@ services:
           OPT_EAGER="--enforce-eager"
         fi
         exec vllm serve \
-          "/models/Qwen3.5-122B-A10B-FP8" \
+          "/models/Qwen3.5-122B-A10B" \
           --trust-remote-code \
-          --served-model-name "Qwen/Qwen3.5-122B-A10B-FP8" \
+          --served-model-name "Qwen/Qwen3.5-122B-A10B" \
           --host 0.0.0.0 \
           --port 8000 \
           --tensor-parallel-size "$${VLLM_TENSOR_PARALLEL_SIZE:-1}" \

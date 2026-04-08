@@ -1,0 +1,102 @@
+# Qwen3.5-27B + vLLM (dense ~27B params).
+# Model card: https://huggingface.co/Qwen/Qwen3.5-27B
+#
+# Hugging Face context length (see model card “Quickstart” + config.json text_config):
+#   - Native maximum: 262,144 tokens (max_position_embeddings in HF config).
+#   - Official vLLM example on the card: --max-model-len 262144 with --tensor-parallel-size 8.
+#   - If you must reduce for OOM: shorten max-model-len; the card recommends keeping at least 128K tokens
+#     “to preserve thinking capabilities.” This compose defaults VLLM_MAX_MODEL_LEN to 131072 (128 Ki) as a
+#     conservative single-GPU floor — set VLLM_MAX_MODEL_LEN=262144 in `.env` to match HF when you have enough GPU memory.
+#
+# Sits between Qwen3.5-9B and Qwen3.5-35B-A3B (MoE). On a single ~96 GiB HBM GPU, BF16 weights (~54 GiB)
+# plus long-context KV can be tight — lower VLLM_MAX_MODEL_LEN in `.env` if you OOM, or set
+# VLLM_TENSOR_PARALLEL_SIZE to match multiple GPUs.
+#
+# Platform: linux/arm64 (e.g. GH200). Transformers 5 image: Dockerfile.vllm-openai-qwen35.
+#
+#   docker compose -f docker-compose-vllm-gh200-qwen35-27b.yaml build vllm
+#   docker compose -f docker-compose-vllm-gh200-qwen35-27b.yaml up -d
+#
+# Env: VLLM_TENSOR_PARALLEL_SIZE (default 1), VLLM_MAX_MODEL_LEN (default 131072; HF native max 262144 — see above),
+# VLLM_GPU_MEMORY_UTILIZATION (default 0.90), VLLM_HOST_PORT (default 8000), PYTORCH_ALLOC_CONF,
+# repo-root .env for HF_TOKEN.
+#
+# Thinking: Qwen3.5 uses thinking by default; --reasoning-parser qwen3 matches HF’s vLLM recipe. Clients can
+# disable per request with chat_template_kwargs enable_thinking false (see model card).
+#
+# Text-only default: --language-model-only (see model card). Remove for vision; ensure full snapshot including
+# preprocessor_config.json if needed.
+
+services:
+  model-download:
+    platform: linux/arm64
+    image: python:3.12-slim
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./vllm-models:/models
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        python -m pip install -q --no-cache-dir huggingface_hub hf_transfer
+        export HF_HUB_ENABLE_HF_TRANSFER=1
+        if [ -f /models/Qwen3.5-27B/config.json ]; then
+          echo "Model already present; skipping download."
+          exit 0
+        fi
+        echo "Downloading Qwen/Qwen3.5-27B (large, one-time)..."
+        python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='Qwen/Qwen3.5-27B', local_dir='/models/Qwen3.5-27B', local_dir_use_symlinks=False)"
+    restart: "no"
+
+  vllm:
+    platform: linux/arm64
+    build:
+      context: .
+      dockerfile: Dockerfile.vllm-openai-qwen35
+      args:
+        VLLM_BASE_IMAGE: ${VLLM_BASE_IMAGE:-vllm/vllm-openai:latest}
+        TRANSFORMERS_VERSION: ${TRANSFORMERS_VERSION:-5.5.0}
+        HUGGINGFACE_HUB_VERSION: ${HUGGINGFACE_HUB_VERSION:-1.8.0}
+    image: ${VLLM_IMAGE:-vllm-openai-qwen35:latest}
+    container_name: vllm-qwen35-27b
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      model-download:
+        condition: service_completed_successfully
+    volumes:
+      - ./vllm-models:/models
+    environment:
+      - HF_HOME=/models/.cache/huggingface
+      - PYTORCH_ALLOC_CONF=${PYTORCH_ALLOC_CONF:-expandable_segments:True}
+    ports:
+      - "${VLLM_HOST_PORT:-8000}:8000"
+    ipc: host
+    shm_size: 16gb
+    gpus: all
+    command:
+      - "/models/Qwen3.5-27B"
+      - "--trust-remote-code"
+      - "--served-model-name"
+      - "Qwen/Qwen3.5-27B"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+      - "--tensor-parallel-size"
+      - "${VLLM_TENSOR_PARALLEL_SIZE:-1}"
+      - "--max-model-len"
+      - "${VLLM_MAX_MODEL_LEN:-131072}"
+      - "--reasoning-parser"
+      - "qwen3"
+      - "--gpu-memory-utilization"
+      - "${VLLM_GPU_MEMORY_UTILIZATION:-0.90}"
+      - "--enable-auto-tool-choice"
+      - "--tool-call-parser"
+      - "qwen3_coder"
+      - "--language-model-only"
+    restart: unless-stopped
