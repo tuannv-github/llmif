@@ -1,0 +1,44 @@
+# Self-hosted LLM Gateway (unified image). Matches upstream:
+# https://github.com/theopenco/llmgateway/blob/main/scripts/run-unified-container.sh
+#
+# Before first run, set a long random secret (32+ chars). Any ONE of these in `.env` is enough:
+#   LLM_GATEWAY_SECRET=...        (used by this compose file)
+#   AUTH_SECRET=...               (name from upstream .env.unified.example)
+#   BETTER_AUTH_SECRET=...        (Better Auth; copied from AUTH if omitted)
+# Example:
+#   echo "LLM_GATEWAY_SECRET=$(openssl rand -base64 32 | tr -d '\n')" >> .env
+#
+# If logs show missing tables (relation "log" does not exist) after fixing secrets,
+# reset DB volumes once: docker compose down -v && docker compose up -d
+#
+# For dev (Postgres + Redis only), clone the repo and use its docker-compose.yml:
+# https://github.com/theopenco/llmgateway/blob/main/docker-compose.yml
+
+name: llmgateway
+
+services:
+  llmgateway:
+    image: ghcr.io/theopenco/llmgateway-unified:latest
+    container_name: llmgateway
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "3002:3002"
+      - "3003:3003"
+      - "3005:3005"
+      - "3006:3006"
+      - "4001:4001"
+      - "4002:4002"
+    environment:
+      # Resolve secrets from any common env name (empty values still break Better Auth).
+      AUTH_SECRET: ${AUTH_SECRET:-${LLM_GATEWAY_SECRET}}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-${AUTH_SECRET:-${LLM_GATEWAY_SECRET}}}
+    volumes:
+      - llmgateway_postgres:/var/lib/postgresql/data
+      - llmgateway_redis:/var/lib/redis
+
+volumes:
+  llmgateway_postgres:
+  llmgateway_redis:
