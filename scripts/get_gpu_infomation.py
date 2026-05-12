@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Merged GPU report: `nvidia-smi` query fields + PyTorch device properties.
+"""GPU report from NVIDIA tooling only: ``nvidia-smi`` CSV + optional NVML details.
+
+Per-GPU SM / CUDA core / tensor core totals use NVML (``pip install nvidia-ml-py``), the
+same management API ``nvidia-smi`` uses — no PyTorch or CUDA toolkit required for this script.
 
 Default: two-column key | value with units, plus CSV file (field,value,unit rows; default gpu_report.csv, see -o).
 CSV on stdout: --csv (after the table) or --csv-only. Use --no-csv-file to skip writing a file.
@@ -81,16 +84,15 @@ _QUERY_TRIES: tuple[str, ...] = (
     "power.draw,power.limit,clocks.current.sm,clocks.max.sm,pstate",
 )
 
-_PYTORCH_PER_GPU_KEYS: tuple[str, ...] = (
-    "pytorch.compute_capability",
-    "pytorch.sm_count",
-    "pytorch.architecture",
-    "pytorch.cuda_cores_per_sm",
-    "pytorch.tensor_cores_per_sm",
-    "pytorch.tensor_core_note",
-    "pytorch.cuda_cores_total",
-    "pytorch.tensor_cores_total",
-    "pytorch.total_memory_gib",
+_NVML_DETAIL_KEYS: tuple[str, ...] = (
+    "nvml.sm_count",
+    "nvml.architecture",
+    "nvml.cuda_cores_per_sm",
+    "nvml.tensor_cores_per_sm",
+    "nvml.tensor_core_note",
+    "nvml.cuda_cores_total",
+    "nvml.tensor_cores_total",
+    "nvml.total_memory_gib",
 )
 
 # Suffixes for human-readable text (nvidia-smi CSV uses MiB for memory fields; see NVIDIA docs).
@@ -117,12 +119,12 @@ _FIELD_UNITS: dict[str, str] = {
     "pcie.link.gen.current": " (PCIe)",
     "pcie.link.width.max": " lanes",
     "pcie.link.width.current": " lanes",
-    "pytorch.total_memory_gib": " GiB",
-    "pytorch.sm_count": " SMs",
-    "pytorch.cuda_cores_per_sm": " (per SM)",
-    "pytorch.tensor_cores_per_sm": " (per SM)",
-    "pytorch.cuda_cores_total": " CUDA cores",
-    "pytorch.tensor_cores_total": " Tensor cores",
+    "nvml.total_memory_gib": " GiB",
+    "nvml.sm_count": " SMs",
+    "nvml.cuda_cores_per_sm": " (per SM)",
+    "nvml.tensor_cores_per_sm": " (per SM)",
+    "nvml.cuda_cores_total": " CUDA cores",
+    "nvml.tensor_cores_total": " Tensor cores",
 }
 
 
@@ -194,6 +196,121 @@ def _row_for_gpu_index(rows: list[dict[str, str]], index: int) -> dict[str, str]
     return None
 
 
+def _nvml_gpu_detail_rows(nvidia_csv_gpu_count: int) -> tuple[dict[int, dict[str, str]], list[str]]:
+    """SM / core / memory details from NVML (``nvidia-ml-py``). If ``nvidia_csv_gpu_count`` is 0, query all NVML GPUs."""
+    warnings: list[str] = []
+    out: dict[int, dict[str, str]] = {}
+    try:
+        import pynvml  # type: ignore[import-untyped]
+    except ImportError:
+        warnings.append(
+            "nvidia-ml-py not installed — run `pip install nvidia-ml-py` for SM and CUDA core columns.",
+        )
+        return out, warnings
+    try:
+        pynvml.nvmlInit()
+    except Exception as exc:  # noqa: BLE001 — best-effort diagnostics
+        warnings.append(f"NVML init failed ({exc}); SM/core columns omitted.")
+        return out, warnings
+    try:
+        try:
+            n_nvml = int(pynvml.nvmlDeviceGetCount())
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"NVML device count failed ({exc}).")
+            return out, warnings
+        limit = nvidia_csv_gpu_count if nvidia_csv_gpu_count > 0 else n_nvml
+        n_loop = min(limit, n_nvml)
+        if nvidia_csv_gpu_count > n_nvml:
+            warnings.append(
+                f"nvidia-smi reports {nvidia_csv_gpu_count} GPUs but NVML sees {n_nvml} (capped).",
+            )
+        for i in range(n_loop):
+            try:
+                handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+                major, minor = pynvml.nvmlDeviceGetCudaComputeCapability(handle)
+                mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                try:
+                    cores = int(pynvml.nvmlDeviceGetNumGpuCores(handle))
+                except Exception:
+                    cores = -1
+                arch = _arch_for_cc(int(major), int(minor))
+                g: dict[str, str] = {
+                    "nvml.total_memory_gib": f"{mem.total / (1024**3):.6f}",
+                }
+                if arch is None:
+                    g.update(
+                        {
+                            "nvml.architecture": "",
+                            "nvml.sm_count": "",
+                            "nvml.cuda_cores_per_sm": "",
+                            "nvml.tensor_cores_per_sm": "",
+                            "nvml.tensor_core_note": "",
+                            "nvml.cuda_cores_total": "",
+                            "nvml.tensor_cores_total": "",
+                        },
+                    )
+                    warnings.append(
+                        f"GPU {i}: compute capability {int(major)}.{int(minor)} not in built-in table — "
+                        "NVML CUDA core totals omitted.",
+                    )
+                elif cores < 0:
+                    g.update(
+                        {
+                            "nvml.architecture": arch.arch_label,
+                            "nvml.sm_count": "",
+                            "nvml.cuda_cores_per_sm": str(arch.cuda_cores_per_sm),
+                            "nvml.tensor_cores_per_sm": str(arch.tensor_cores_per_sm),
+                            "nvml.tensor_core_note": arch.tensor_note,
+                            "nvml.cuda_cores_total": "",
+                            "nvml.tensor_cores_total": "",
+                        },
+                    )
+                    warnings.append(f"GPU {i}: NVML did not report CUDA core count.")
+                elif arch.cuda_cores_per_sm <= 0:
+                    g["nvml.architecture"] = arch.arch_label
+                    g["nvml.sm_count"] = ""
+                    warnings.append(f"GPU {i}: zero cuda_cores_per_sm in arch table.")
+                elif cores % arch.cuda_cores_per_sm != 0:
+                    sm = cores // arch.cuda_cores_per_sm
+                    g.update(
+                        {
+                            "nvml.architecture": arch.arch_label,
+                            "nvml.sm_count": str(sm),
+                            "nvml.cuda_cores_per_sm": str(arch.cuda_cores_per_sm),
+                            "nvml.tensor_cores_per_sm": str(arch.tensor_cores_per_sm),
+                            "nvml.tensor_core_note": arch.tensor_note,
+                            "nvml.cuda_cores_total": str(cores),
+                            "nvml.tensor_cores_total": str(sm * arch.tensor_cores_per_sm),
+                        },
+                    )
+                    warnings.append(
+                        f"GPU {i}: NVML CUDA core count {cores} is not divisible by "
+                        f"{arch.cuda_cores_per_sm}/SM — SM count may be approximate.",
+                    )
+                else:
+                    sm = cores // arch.cuda_cores_per_sm
+                    g.update(
+                        {
+                            "nvml.architecture": arch.arch_label,
+                            "nvml.sm_count": str(sm),
+                            "nvml.cuda_cores_per_sm": str(arch.cuda_cores_per_sm),
+                            "nvml.tensor_cores_per_sm": str(arch.tensor_cores_per_sm),
+                            "nvml.tensor_core_note": arch.tensor_note,
+                            "nvml.cuda_cores_total": str(sm * arch.cuda_cores_per_sm),
+                            "nvml.tensor_cores_total": str(sm * arch.tensor_cores_per_sm),
+                        },
+                    )
+                out[i] = g
+            except Exception as exc:  # noqa: BLE001
+                warnings.append(f"GPU {i}: NVML query failed ({exc}).")
+    finally:
+        try:
+            pynvml.nvmlShutdown()
+        except Exception:
+            pass
+    return out, warnings
+
+
 def _fetch_nvidia_smi_brief_and_rows() -> tuple[int, str, str, list[dict[str, str]] | None, str, str]:
     code, brief_out, brief_err = _run(("nvidia-smi",))
     last_err = ""
@@ -219,70 +336,19 @@ def _merge_gpu_snapshot(
         "cuda_version_banner": cuda or "",
     }
 
-    torch_version = ""
-    torch_cuda_ok = "False"
-    torch_cuda_ver = ""
-    torch_per_gpu: dict[int, dict[str, str]] = {}
-
-    try:
-        import torch
-
-        torch_version = torch.__version__
-        torch_cuda_ok = str(torch.cuda.is_available())
-        if torch.cuda.is_available():
-            torch_cuda_ver = str(torch.version.cuda)
-            for i in range(torch.cuda.device_count()):
-                p = torch.cuda.get_device_properties(i)
-                arch = _arch_for_cc(p.major, p.minor)
-                sm = p.multi_processor_count
-                cap = f"{p.major}.{p.minor}"
-                g: dict[str, str] = {
-                    "pytorch.compute_capability": cap,
-                    "pytorch.sm_count": str(sm),
-                    "pytorch.total_memory_gib": f"{p.total_memory / (1024**3):.6f}",
-                }
-                if arch is None:
-                    g.update(
-                        {
-                            "pytorch.architecture": "",
-                            "pytorch.cuda_cores_per_sm": "",
-                            "pytorch.tensor_cores_per_sm": "",
-                            "pytorch.tensor_core_note": "",
-                            "pytorch.cuda_cores_total": "",
-                            "pytorch.tensor_cores_total": "",
-                        },
-                    )
-                    warnings.append(
-                        f"GPU {i}: compute capability {cap} not in built-in table — CUDA/Tensor totals omitted.",
-                    )
-                else:
-                    g["pytorch.architecture"] = arch.arch_label
-                    g["pytorch.cuda_cores_per_sm"] = str(arch.cuda_cores_per_sm)
-                    g["pytorch.tensor_cores_per_sm"] = str(arch.tensor_cores_per_sm)
-                    g["pytorch.tensor_core_note"] = arch.tensor_note
-                    g["pytorch.cuda_cores_total"] = str(sm * arch.cuda_cores_per_sm)
-                    g["pytorch.tensor_cores_total"] = str(sm * arch.tensor_cores_per_sm)
-                torch_per_gpu[i] = g
-    except ImportError:
-        warnings.append("PyTorch not installed — pytorch.* columns will be empty.")
-
-    meta["pytorch.version"] = torch_version
-    meta["pytorch.cuda.is_available"] = torch_cuda_ok
-    meta["pytorch.cuda.version"] = torch_cuda_ver
-
     n_nvidia = len(rn)
-    n_torch = len(torch_per_gpu)
-    count = max(n_nvidia, n_torch)
+    nvml_per_gpu, nvml_warnings = _nvml_gpu_detail_rows(n_nvidia)
+    warnings.extend(nvml_warnings)
 
+    n_nvml_detail = len(nvml_per_gpu)
+    count = max(n_nvidia, n_nvml_detail)
     if count == 0:
         return [], [], warnings + ["No GPU devices found."]
 
-    if n_nvidia and n_torch and n_nvidia != n_torch:
-        warnings.append(
-            f"GPU count mismatch: nvidia-smi has {n_nvidia} rows, PyTorch sees {n_torch} devices (aligned by index).",
-        )
+    if n_nvidia == 0 and n_nvml_detail > 0:
+        warnings.append("No nvidia-smi CSV rows — report uses NVML device indices only.")
 
-    empty_torch = {k: "" for k in _PYTORCH_PER_GPU_KEYS}
+    empty_nvml = {k: "" for k in _NVML_DETAIL_KEYS}
     rows_out: list[dict[str, str]] = []
     for i in range(count):
         row: dict[str, str] = dict(meta)
@@ -293,8 +359,11 @@ def _merge_gpu_snapshot(
             if r:
                 row.update(r)
             else:
+                row["index"] = str(i)
                 warnings.append(f"No nvidia-smi CSV row for GPU index {i}.")
-        row.update(torch_per_gpu.get(i, dict(empty_torch)))
+        else:
+            row["index"] = str(i)
+        row.update(nvml_per_gpu.get(i, dict(empty_nvml)))
         rows_out.append(row)
 
     nvidia_key_order = list((_row_for_gpu_index(rn, 0) or rn[0]).keys()) if rn else []
@@ -302,13 +371,10 @@ def _merge_gpu_snapshot(
     global_keys = [
         "driver_version_banner",
         "cuda_version_banner",
-        "pytorch.version",
-        "pytorch.cuda.is_available",
-        "pytorch.cuda.version",
     ]
     order: list[str] = []
     seen: set[str] = set()
-    for k in global_keys + nvidia_key_order + list(_PYTORCH_PER_GPU_KEYS):
+    for k in global_keys + nvidia_key_order + list(_NVML_DETAIL_KEYS):
         if k not in seen:
             order.append(k)
             seen.add(k)
@@ -347,7 +413,7 @@ def _with_unit(key: str, raw: str) -> str:
     if unit.endswith("SMs") or "cores" in unit or "per SM" in unit:
         if not _looks_like_number(s):
             return s
-    if key == "pytorch.total_memory_gib" and not _looks_like_number(s):
+    if key == "nvml.total_memory_gib" and not _looks_like_number(s):
         return s
     if unit == " (PCIe)" and _looks_like_number(s):
         return f"PCIe Gen {s}"
@@ -457,7 +523,10 @@ def main() -> int:
         if rows_merge is None and last_err:
             print(last_err, file=sys.stderr)
     else:
-        print("nvidia-smi not in PATH; using PyTorch-only columns where possible.", file=sys.stderr)
+        print(
+            "nvidia-smi not in PATH; SM/query columns need nvidia-smi or nvidia-ml-py (NVML).",
+            file=sys.stderr,
+        )
 
     cols, merged, warns = _merge_gpu_snapshot(rows_merge, brief_out)
     for w in warns:
