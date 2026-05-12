@@ -1,0 +1,40 @@
+# Qwen2.5-VL-3B-Instruct (Transformers) on GH200 — PyTorch base image + GPU.
+# Script: Qwen2.5-VL-3B-Instruct.py (loads Qwen/Qwen2.5-VL-3B-Instruct from Hugging Face).
+#
+# Default image is NVIDIA NGC PyTorch (CUDA on linux/arm64). Log in first:
+#   docker login nvcr.io   # username: $oauthtoken, password: NGC API key
+#
+# Override with Docker Hub PyTorch, for example:
+#   PYTORCH_IMAGE=pytorch/pytorch:2.6.0-cuda12.6-cudnn9-runtime docker compose -f scripts/docker-compose.Qwen2.5-VL-3B-Instruct.gh200.yaml up
+#
+# From repo root (paths in this file are relative to the compose file directory = scripts/):
+#   docker compose -f scripts/docker-compose.Qwen2.5-VL-3B-Instruct.gh200.yaml up --build
+#
+# Optional: repo-root .env with HF_TOKEN= for gated models / higher rate limits.
+
+services:
+  qwen25-vl-3b:
+    image: ${PYTORCH_IMAGE:-nvcr.io/nvidia/pytorch:25.01-py3}
+    container_name: qwen25-vl-3b-gh200
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - qwen25-vl-hf-cache:/root/.cache/huggingface
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+    ipc: host
+    shm_size: 4gb
+    gpus: all
+    command:
+      - bash
+      - -lc
+      - |
+        set -e
+        pip install --no-cache-dir -q transformers accelerate qwen-vl-utils Pillow
+        exec python Qwen2.5-VL-3B-Instruct.py
+
+volumes:
+  qwen25-vl-hf-cache:

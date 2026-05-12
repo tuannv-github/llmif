@@ -1,0 +1,39 @@
+# Ultralytics YOLO on GH200 — NVIDIA PyTorch base image + GPU. Runs yolo_test.py.
+#
+# Default image: NGC PyTorch (CUDA, linux/arm64). Log in first:
+#   docker login nvcr.io   # username: $oauthtoken, password: NGC API key
+#
+# Override base image:
+#   PYTORCH_IMAGE=pytorch/pytorch:2.6.0-cuda12.6-cudnn9-runtime docker compose -f scripts/docker-compose.yolo.yaml up
+#
+# From repo root:
+#   docker compose -f scripts/docker-compose.yolo.yaml up
+#
+# From scripts/:
+#   docker compose -f docker-compose.yolo.yaml up
+
+services:
+  yolo:
+    image: ${PYTORCH_IMAGE:-nvcr.io/nvidia/pytorch:25.01-py3}
+    container_name: yolo-gh200
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - yolo-cache:/root/.cache
+    env_file:
+      - path: ../.env
+        required: false
+    ipc: host
+    shm_size: 4gb
+    gpus: all
+    command:
+      - bash
+      - -lc
+      - |
+        set -e
+        # Pin NumPy <2: NGC image OpenCV (cv2) is built against NumPy 1.x; ultralytics can pull NumPy 2 and break imports.
+        pip install --no-cache-dir -q "numpy>=1.26,<2" ultralytics
+        exec python yolo_test.py
+
+volumes:
+  yolo-cache:
